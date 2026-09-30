@@ -1234,8 +1234,17 @@ CERT_CheckKeyUsage(CERTCertificate *cert, unsigned int requiredUsage)
                 requiredUsage |= KU_DIGITAL_SIGNATURE;
                 break;
             case dhKey:
-            case kyberKey:
                 requiredUsage |= KU_KEY_AGREEMENT;
+                break;
+            case kyberKey:
+                /* RFC 9935 section 5: "If the keyUsage extension is present
+                 * in certificates, then keyEncipherment MUST be the only key
+                 * usage set" for ML-KEM certificates. ML-KEM is neither
+                 * classic key agreement (Diffie-Hellman) nor RSA key
+                 * transport, but RFC 9935 settles it as keyEncipherment;
+                 * grouping it with dhKey's KU_KEY_AGREEMENT (as before) made
+                 * RFC-conformant ML-KEM certs fail this check entirely. */
+                requiredUsage |= KU_KEY_ENCIPHERMENT;
                 break;
             case ecKey:
                 /* Accept either signature or agreement. */
