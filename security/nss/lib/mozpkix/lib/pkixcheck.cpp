@@ -286,6 +286,22 @@ CheckSubjectPublicKeyInfoContents(Reader& input, TrustDomain& trustDomain,
       0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x13
   };
 
+  // RFC 9935 (ML-KEM X.509 profile)
+  // python DottedOIDToCode.py id-alg-ml-kem-512 2.16.840.1.101.3.4.4.1
+  static const uint8_t id_ml_kem_512[] = {
+      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x04, 0x01
+  };
+
+  // python DottedOIDToCode.py id-alg-ml-kem-768 2.16.840.1.101.3.4.4.2
+  static const uint8_t id_ml_kem_768[] = {
+      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x04, 0x02
+  };
+
+  // python DottedOIDToCode.py id-alg-ml-kem-1024 2.16.840.1.101.3.4.4.3
+  static const uint8_t id_ml_kem_1024[] = {
+      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x04, 0x03
+  };
+
   if (algorithmOID.MatchRest(id_ecPublicKey)) {
     // An id-ecPublicKey AlgorithmIdentifier has a parameter that identifes
     // the curve being used. Although RFC 5480 specifies multiple forms, we
@@ -412,6 +428,27 @@ CheckSubjectPublicKeyInfoContents(Reader& input, TrustDomain& trustDomain,
      * In DER encoding, the absence of the parameters field means that after parsing the
      * OID, no additional bytes should remain. Calling `der::End(algorithm)` confirms that
      * this constraint is satisfied and that the structure is correctly encoded.
+     */
+    rv = der::End(algorithm);
+    if (rv != Success) {
+      return rv;
+    }
+
+    Input rawPublicKey;
+    rv = subjectPublicKeyReader.SkipToEnd(rawPublicKey);
+    if (rv != Success) {
+      return rv;
+    }
+  } else if (algorithmOID.MatchRest(id_ml_kem_512) ||
+             algorithmOID.MatchRest(id_ml_kem_768) ||
+             algorithmOID.MatchRest(id_ml_kem_1024)) {
+
+    /*
+     * RFC 9935 section 3: "The parameters field of the AlgorithmIdentifier
+     * for the ML-KEM public key MUST be absent." Same shape as ML-DSA above:
+     * confirm no bytes remain after the OID, then the raw public key is
+     * whatever is left of the BIT STRING (ML-KEM has no further ASN.1
+     * structure of its own here).
      */
     rv = der::End(algorithm);
     if (rv != Success) {
