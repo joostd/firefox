@@ -177,6 +177,7 @@
             'cmd/httpserv/httpserv.gyp:httpserv',
             'cmd/listsuites/listsuites.gyp:listsuites',
             'cmd/makepqg/makepqg.gyp:makepqg',
+            'cmd/mlkemcert/mlkemcert.gyp:mlkemcert',
             'cmd/multinit/multinit.gyp:multinit',
             'cmd/nss-policy-check/nss-policy-check.gyp:nss-policy-check',
             'cmd/ocspclnt/ocspclnt.gyp:ocspclnt',

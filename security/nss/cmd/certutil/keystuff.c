@@ -614,6 +614,42 @@ CERTUTIL_GeneratePrivateKey(KeyType keytype, PK11SlotInfo *slot, int size,
             params = &paramSet;
             break;
 
+        case kyberKey:
+            mechanism = CKM_ML_KEM_KEY_PAIR_GEN;
+            paramSet = 0;
+            if (pqgFile) {
+                if (PORT_Strcasecmp(pqgFile, "ML-KEM-512") == 0) {
+                    paramSet = CKP_ML_KEM_512;
+                } else if (PORT_Strcasecmp(pqgFile, "ML-KEM-768") == 0) {
+                    paramSet = CKP_ML_KEM_768;
+                } else if (PORT_Strcasecmp(pqgFile, "ML-KEM-1024") == 0) {
+                    paramSet = CKP_ML_KEM_1024;
+                } else {
+                    /* if we set pqgfile, it had better be right, don't
+                     * fall back to key size */
+                    return NULL;
+                }
+            } else
+                switch (size) {
+                    case 512:
+                        paramSet = CKP_ML_KEM_512;
+                        break;
+                    case 768:
+                        paramSet = CKP_ML_KEM_768;
+                        break;
+                    case 1024:
+                        paramSet = CKP_ML_KEM_1024;
+                        break;
+                    default:
+                        /* force a size to be specified somewhere */
+                        return NULL;
+                }
+            if (paramSet == 0) {
+                return NULL;
+            }
+            params = &paramSet;
+            break;
+
         default:
             return NULL;
     }

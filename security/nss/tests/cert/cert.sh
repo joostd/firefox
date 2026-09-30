@@ -752,6 +752,49 @@ CERTSCRIPT
   fi
 }
 
+############################## cert_ml_kem_smime ##############################
+# local shell function to create an ML-KEM S/MIME identity certificate
+#
+# ML-KEM cannot sign anything, so the usual self-signed-CSR-then-CA-signs
+# flow (certu -R then certu -C) cannot work for it: `certutil -R -k mlkem`
+# fails outright with SEC_ERROR_INVALID_ALGORITHM trying to self-sign the
+# request. Instead this uses the mlkemcert tool (cmd/mlkemcert), which
+# generates the ML-KEM keypair and mints+signs the certificate directly,
+# bypassing the CSR/self-signature step entirely (CERT_CreateCertificate
+# never verifies one). To sidestep needing the key generated in one
+# directory and the CA looked up in another, both the key and the signing
+# CA live in the same directory (CADIR, which already holds TestCA-ml-dsa-87
+# from cert_ml_dsa_CA) -- there is no dedicated per-identity directory for
+# these certs the way cert_add_cert's Alice/Bob certs have one.
+##########################################################################
+cert_ml_kem_smime()
+{
+  PARAM_SET=$1
+  NICKNAME=$2
+  SUBJECT_EMAIL=$3
+  CERTSERIAL=$4
+
+  echo "$SCRIPTNAME: Creating an ML-KEM ($PARAM_SET) S/MIME Certificate $NICKNAME =========================="
+
+  CU_ACTION="Minting ML-KEM ($PARAM_SET) Cert $NICKNAME"
+  echo "mlkemcert -d ${CADIR} -c TestCA-ml-dsa-87 -f ${R_PWFILE} -s \"CN=$NICKNAME,E=$SUBJECT_EMAIL,O=BOGUS NSS,L=Mountain View,ST=California,C=US\" -m $CERTSERIAL -q $PARAM_SET -o ${NICKNAME}.der"
+  ${PROFTOOL} ${BINDIR}/mlkemcert -d ${CADIR} -c TestCA-ml-dsa-87 -f ${R_PWFILE} \
+    -s "CN=$NICKNAME,E=$SUBJECT_EMAIL,O=BOGUS NSS,L=Mountain View,ST=California,C=US" \
+    -m $CERTSERIAL -q $PARAM_SET -o ${CADIR}/${NICKNAME}.der 2>&1
+  RET=$?
+  html_msg $RET 0 "$CU_ACTION" "."
+  if [ "$RET" -ne 0 ]; then
+      Exit 6 "Fatal - failed to mint ML-KEM ($PARAM_SET) cert $NICKNAME"
+  fi
+
+  CU_ACTION="Importing ML-KEM ($PARAM_SET) Cert $NICKNAME"
+  certu -A -n "$NICKNAME" -t ",," -d "${CADIR}" -f "${R_PWFILE}" \
+    -i "${CADIR}/${NICKNAME}.der" 2>&1
+  if [ "$RET" -ne 0 ]; then
+      Exit 7 "Fatal - failed to import ML-KEM ($PARAM_SET) cert $NICKNAME"
+  fi
+}
+
 ################################ cert_rsa_pss_CA #############################
 # local shell function to build the Temp. Certificate Authority (CA)
 # used for testing purposes, creating  a CA Certificate and a root cert
@@ -898,6 +941,10 @@ cert_smime_client()
 
   cert_create_cert ${ALICEDIR} "Alice" 30 ${D_ALICE}
   cert_create_cert ${BOBDIR} "Bob" 40  ${D_BOB}
+
+  cert_ml_kem_smime ml-kem-512 Alice-ml-kem-512 Alice-ml-kem-512@example.com 90512
+  cert_ml_kem_smime ml-kem-768 Alice-ml-kem-768 Alice-ml-kem-768@example.com 90768
+  cert_ml_kem_smime ml-kem-1024 Alice-ml-kem-1024 Alice-ml-kem-1024@example.com 91024
 
   echo "$SCRIPTNAME: Creating Dave's Certificate -------------------------"
   cert_create_cert "${DAVEDIR}" Dave 50 ${D_DAVE}

@@ -142,6 +142,66 @@ cms_sign()
   html_msg $? 0 "Compare Attached Signed Data and Original (ECDSA w/ ${HASH})" "."
 }
 
+# ML-DSA signs the message itself rather than a digest, so there is no
+# per-hash matrix to run. RFC 9882 section 3.3 makes SHA-512 a MUST for the
+# SignerInfo digestAlgorithm, so that is what we exercise.
+cms_sign_mldsa()
+{
+  for param_set in ml-dsa-44 ml-dsa-65 ml-dsa-87; do
+    SIGNER="Alice-${param_set}"
+    SIG="sig.${param_set}"
+
+    echo "$SCRIPTNAME: Signing Detached Message (${param_set}) --------------"
+    echo "cmsutil -S -G -T -N ${SIGNER} -H SHA512 -i alice.txt -d ${P_R_ALICEDIR} -p nss -o alice-${SIG}.d"
+    ${PROFTOOL} ${BINDIR}/cmsutil -S -G -T -N ${SIGNER} -H SHA512 -i alice.txt -d ${P_R_ALICEDIR} -p nss -o alice-${SIG}.d
+    html_msg $? 0 "Create Detached Signature Alice (${param_set})" "."
+
+    echo "cmsutil -D -i alice-${SIG}.d -c alice.txt -d ${P_R_BOBDIR}"
+    ${PROFTOOL} ${BINDIR}/cmsutil -D -i alice-${SIG}.d -c alice.txt -d ${P_R_BOBDIR}
+    html_msg $? 0 "Verifying Alice's Detached Signature (${param_set})" "."
+
+    echo "$SCRIPTNAME: Signing Attached Message (${param_set}) --------------"
+    echo "cmsutil -S -G -N ${SIGNER} -H SHA512 -i alice.txt -d ${P_R_ALICEDIR} -p nss -o alice-${SIG}"
+    ${PROFTOOL} ${BINDIR}/cmsutil -S -G -N ${SIGNER} -H SHA512 -i alice.txt -d ${P_R_ALICEDIR} -p nss -o alice-${SIG}
+    html_msg $? 0 "Create Attached Signature Alice (${param_set})" "."
+
+    echo "cmsutil -D -i alice-${SIG} -d ${P_R_BOBDIR} -o alice.data.${param_set}"
+    ${PROFTOOL} ${BINDIR}/cmsutil -D -i alice-${SIG} -d ${P_R_BOBDIR} -o alice.data.${param_set}
+    html_msg $? 0 "Decode Alice's Attached Signature (${param_set})" "."
+
+    echo "diff alice.txt alice.data.${param_set}"
+    diff alice.txt alice.data.${param_set}
+    html_msg $? 0 "Compare Attached Signed Data and Original (${param_set})" "."
+  done
+}
+
+# ML-KEM encryption (RFC 9629/9936 KEMRecipientInfo). The recipient
+# certs are minted by cert_ml_kem_smime (tests/cert/cert.sh) directly into
+# CADIR rather than into a per-identity directory like Alice/Bob's other
+# certs, since ML-KEM can't go through the usual self-signed-CSR route --
+# see that function's comment. So both encrypt and decrypt below use
+# ${P_R_CADIR} rather than the Alice/Bob directories cms_sign_mldsa uses.
+cms_envelope_mlkem()
+{
+  for param_set in ml-kem-512 ml-kem-768 ml-kem-1024; do
+    RECIPIENT="Alice-${param_set}"
+    ENV="env.${param_set}"
+
+    echo "$SCRIPTNAME: Enveloping Message (${param_set}) --------------"
+    echo "cmsutil -E -r ${RECIPIENT} -i alice.txt -d ${P_R_CADIR} -o alice-${ENV}"
+    ${PROFTOOL} ${BINDIR}/cmsutil -E -r ${RECIPIENT} -i alice.txt -d ${P_R_CADIR} -o alice-${ENV}
+    html_msg $? 0 "Create Enveloped Data (${param_set})" "."
+
+    echo "cmsutil -D -i alice-${ENV} -d ${P_R_CADIR} -p nss -o alice.denv.${param_set}"
+    ${PROFTOOL} ${BINDIR}/cmsutil -D -i alice-${ENV} -d ${P_R_CADIR} -p nss -o alice.denv.${param_set}
+    html_msg $? 0 "Decode Enveloped Data (${param_set})" "."
+
+    echo "diff alice.txt alice.denv.${param_set}"
+    diff alice.txt alice.denv.${param_set}
+    html_msg $? 0 "Compare Enveloped Data and Original (${param_set})" "."
+  done
+}
+
 header_mime_from_to_subject="MIME-Version: 1.0
 Date: ${EMAILDATE}
 From: Alice@example.com
@@ -728,6 +788,9 @@ smime_main()
   smime_signed_enveloped
   smime_plain_signed
   smime_enveloped_signed
+
+  cms_sign_mldsa
+  cms_envelope_mlkem
 
   echo "$SCRIPTNAME: Enveloped Data Tests ------------------------------"
   echo "cmsutil -E -r bob@example.com -i alice.txt -d ${P_R_ALICEDIR} -p nss \\"

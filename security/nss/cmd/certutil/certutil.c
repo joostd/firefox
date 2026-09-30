@@ -2804,6 +2804,8 @@ certutil_main(int argc, char **argv, PRBool initialize)
             keytype = ecKey;
         } else if (PL_strcmp(arg, "mldsa") == 0) {
             keytype = mldsaKey;
+        } else if (PL_strcmp(arg, "mlkem") == 0) {
+            keytype = kyberKey;
         } else if (PL_strcmp(arg, "all") == 0) {
             keytype = nullKey;
         } else {
@@ -2816,9 +2818,9 @@ certutil_main(int argc, char **argv, PRBool initialize)
 
     if (certutil.options[opt_KeySize].activated) {
         keysize = PORT_Atoi(certutil.options[opt_KeySize].arg);
-        /* mldsa limits are much different that rsa and dsa, don't
+        /* mldsa/mlkem limits are much different that rsa and dsa, don't
          * do the check here */
-        if ((keytype != mldsaKey) &&
+        if ((keytype != mldsaKey) && (keytype != kyberKey) &&
             ((keysize < MIN_KEY_BITS) || (keysize > MAX_KEY_BITS))) {
             PR_fprintf(PR_STDERR,
                        "%s -g:  Keysize must be between %d and %d.\n",
@@ -2893,11 +2895,12 @@ certutil_main(int argc, char **argv, PRBool initialize)
     /*  -q PQG file or curve name */
     if (certutil.options[opt_PQGFile].activated) {
         if ((keytype != dsaKey) && (keytype != ecKey) &&
-            (keytype != mldsaKey)) {
+            (keytype != mldsaKey) && (keytype != kyberKey)) {
             PR_fprintf(PR_STDERR, "%s -q: specifies a PQG file for DSA keys"
                                   " (-k dsa)\n"
                                   " or a named curve for EC keys (-k ec)\n"
-                                  " or a parameter set for ML-DSA keys (-k mldsa)\n",
+                                  " or a parameter set for ML-DSA keys (-k mldsa)\n"
+                                  " or a parameter set for ML-KEM keys (-k mlkem)\n",
                        progName);
             return 255;
         }
