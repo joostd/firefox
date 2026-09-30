@@ -16,6 +16,7 @@ certificate-viewer-certificate-authority = Certificate Authority
 certificate-viewer-cipher-suite = Cipher Suite
 certificate-viewer-common-name = Common Name
 certificate-viewer-email-address = Email Address
+certificate-viewer-user-id = User ID
 # Variables:
 #   $firstCertName (String) - Common Name for the displayed certificate
 certificate-viewer-tab-title = Certificate for { $firstCertName }
