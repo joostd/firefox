@@ -23,6 +23,7 @@
  */
 
 #include "mozpkix/pkixcheck.h"
+#include <optional>
 
 #include "mozpkix/pkixder.h"
 #include "mozpkix/pkixutil.h"
@@ -41,7 +42,7 @@ CheckSignatureAlgorithm(TrustDomain& trustDomain,
 {
   // 4.1.1.2. signatureAlgorithm
   der::PublicKeyAlgorithm publicKeyAlg;
-  DigestAlgorithm digestAlg;
+  std::optional<DigestAlgorithm> digestAlg = std::nullopt;
   Reader signatureAlgorithmReader(signedData.algorithm);
   Result rv = der::SignatureAlgorithmIdentifierValue(signatureAlgorithmReader,
                                                      publicKeyAlg, digestAlg);
@@ -55,7 +56,7 @@ CheckSignatureAlgorithm(TrustDomain& trustDomain,
 
   // 4.1.2.3. Signature
   der::PublicKeyAlgorithm signedPublicKeyAlg;
-  DigestAlgorithm signedDigestAlg;
+  std::optional<DigestAlgorithm> signedDigestAlg = std::nullopt;
   Reader signedSignatureAlgorithmReader(signatureValue);
   rv = der::SignatureAlgorithmIdentifierValue(signedSignatureAlgorithmReader,
                                               signedPublicKeyAlg,
@@ -78,7 +79,20 @@ CheckSignatureAlgorithm(TrustDomain& trustDomain,
   //
   // Along the same lines, we accept two different OIDs for RSA-with-SHA1, and
   // we consider those OIDs to be equivalent here.
-  if (publicKeyAlg != signedPublicKeyAlg || digestAlg != signedDigestAlg) {
+  if (publicKeyAlg != signedPublicKeyAlg) {
+    return Result::ERROR_SIGNATURE_ALGORITHM_MISMATCH;
+  }
+
+  // Note that in post-quantum signature algorithms (e.g., pure ML-DSA), there
+  // is no pre-hash involved, so they do not require a separate digest
+  // algorithm. In those cases, the digest algorithm may be empty
+  // (std::nullopt), and that is considered valid as long as both the
+  // "signature" algorithm identifier in the TBSCertificate sequence and the
+  // "signatureAlgorithm" field in the Certificate sequence specify (or omit)
+  // it consistently.
+  if (digestAlg.has_value() != signedDigestAlg.has_value() ||
+      (digestAlg && signedDigestAlg &&
+       digestAlg.value() != signedDigestAlg.value())) {
     return Result::ERROR_SIGNATURE_ALGORITHM_MISMATCH;
   }
 
@@ -92,10 +106,13 @@ CheckSignatureAlgorithm(TrustDomain& trustDomain,
   // more generally it short-circuits any path building with them (which, of
   // course, is even slower).
 
-  rv = trustDomain.CheckSignatureDigestAlgorithm(digestAlg, endEntityOrCA,
-                                                 notBefore);
-  if (rv != Success) {
-    return rv;
+  if (digestAlg.has_value()) {
+    rv = trustDomain.CheckSignatureDigestAlgorithm(digestAlg.value(),
+                                                   endEntityOrCA,
+                                                   notBefore);
+    if (rv != Success) {
+      return rv;
+    }
   }
 
   switch (publicKeyAlg) {
@@ -117,6 +134,9 @@ CheckSignatureAlgorithm(TrustDomain& trustDomain,
       // ECDSA curves. However, since there has been no similar deprecation for
       // for any curve that we support, the chances of us encountering a curve
       // during path building is too low to be worth bothering with.
+      break;
+
+    case der::PublicKeyAlgorithm::MLDSA:
       break;
     MOZILLA_PKIX_UNREACHABLE_DEFAULT_ENUM
   }
@@ -248,6 +268,24 @@ CheckSubjectPublicKeyInfoContents(Reader& input, TrustDomain& trustDomain,
     0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01
   };
 
+  // Params for pure ML-DSA-44 signature
+  // python DottedOIDToCode.py id-ml-dsa-44 2.16.840.1.101.3.4.3.17
+  static const uint8_t id_ml_dsa_44[] = {
+      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x11
+  };
+
+  // Params for pure ML-DSA-65 signature
+  // python DottedOIDToCode.py id-ml-dsa-65 2.16.840.1.101.3.4.3.18
+  static const uint8_t id_ml_dsa_65[] = {
+      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x12
+  };
+
+  // Params for pure ML-DSA-87 signature
+  // python DottedOIDToCode.py id-ml-dsa-87 2.16.840.1.101.3.4.3.19
+  static const uint8_t id_ml_dsa_87[] = {
+      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x13
+  };
+
   if (algorithmOID.MatchRest(id_ecPublicKey)) {
     // An id-ecPublicKey AlgorithmIdentifier has a parameter that identifes
     // the curve being used. Although RFC 5480 specifies multiple forms, we
@@ -358,6 +396,30 @@ CheckSubjectPublicKeyInfoContents(Reader& input, TrustDomain& trustDomain,
       Input exponent;
       return der::PositiveInteger(r, exponent);
     });
+    if (rv != Success) {
+      return rv;
+    }
+  } else if (algorithmOID.MatchRest(id_ml_dsa_44) ||
+             algorithmOID.MatchRest(id_ml_dsa_65) ||
+             algorithmOID.MatchRest(id_ml_dsa_87)) {
+
+    /*
+     * The ML-DSA AlgorithmIdentifier is expected to contain only the OID,
+     * with no parameters field present. According to the Internet-Draft
+     * https://www.ietf.org/archive/id/draft-ietf-lamps-dilithium-certificates-11.html
+     * (Section 3), the AlgorithmIdentifier for ML-DSA variants must omit the `parameters`
+     * field entirely.
+     * In DER encoding, the absence of the parameters field means that after parsing the
+     * OID, no additional bytes should remain. Calling `der::End(algorithm)` confirms that
+     * this constraint is satisfied and that the structure is correctly encoded.
+     */
+    rv = der::End(algorithm);
+    if (rv != Success) {
+      return rv;
+    }
+
+    Input rawPublicKey;
+    rv = subjectPublicKeyReader.SkipToEnd(rawPublicKey);
     if (rv != Success) {
       return rv;
     }

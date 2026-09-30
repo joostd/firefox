@@ -344,6 +344,15 @@ TestVerifyECDSASignedData(Input data, DigestAlgorithm digestAlgorithm,
 }
 
 Result
+TestVerifyMLDSASignedData(Input data, Input signature,
+    Input subjectPublicKeyInfo)
+{
+  InitNSSIfNeeded();
+  return VerifyMLDSASignedDataNSS(data, signature, subjectPublicKeyInfo,
+      nullptr);
+}
+
+Result
 TestVerifyRSAPKCS1SignedData(Input data, DigestAlgorithm digestAlgorithm,
     Input signature, Input subjectPublicKeyInfo)
 {

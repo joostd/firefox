@@ -305,6 +305,9 @@ typedef std::unique_ptr<TestKeyPair> ScopedTestKeyPair;
 
 Result TestVerifyECDSASignedData(Input data, DigestAlgorithm digestAlgorithm,
                                  Input signature, Input subjectPublicKeyInfo);
+// ML-DSA signs the message itself, so there is no digest algorithm to pass.
+Result TestVerifyMLDSASignedData(Input data, Input signature,
+                                 Input subjectPublicKeyInfo);
 Result TestVerifyRSAPKCS1SignedData(Input data, DigestAlgorithm digestAlgorithm,
                                     Input signature,
                                     Input subjectPublicKeyInfo);

@@ -140,6 +140,12 @@ class EverythingFailsByDefaultTrustDomain : public TrustDomain {
                       Result::FATAL_ERROR_LIBRARY_FAILURE);
   }
 
+  Result VerifyMLDSASignedData(Input, Input, Input) override {
+    ADD_FAILURE();
+    return NotReached("VerifyMLDSASignedData should not be called",
+                      Result::FATAL_ERROR_LIBRARY_FAILURE);
+  }
+
   Result CheckRSAPublicKeyModulusSizeInBits(EndEntityOrCA,
                                             unsigned int) override {
     ADD_FAILURE();
@@ -192,6 +198,11 @@ class DefaultCryptoTrustDomain : public EverythingFailsByDefaultTrustDomain {
                                Input subjectPublicKeyInfo) override {
     return TestVerifyECDSASignedData(data, digestAlgorithm, signature,
                                      subjectPublicKeyInfo);
+  }
+
+  Result VerifyMLDSASignedData(Input data, Input signature,
+                               Input subjectPublicKeyInfo) override {
+    return TestVerifyMLDSASignedData(data, signature, subjectPublicKeyInfo);
   }
 
   Result CheckRSAPublicKeyModulusSizeInBits(EndEntityOrCA,

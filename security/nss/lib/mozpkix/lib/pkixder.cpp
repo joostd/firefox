@@ -23,6 +23,7 @@
  */
 
 #include "mozpkix/pkixder.h"
+#include <optional>
 
 #include "mozpkix/pkixutil.h"
 
@@ -86,7 +87,7 @@ ReadTagAndGetValue(Reader& input, /*out*/ uint8_t& tag, /*out*/ Input& value)
 Result
 SignatureAlgorithmIdentifierValue(Reader& input,
                                  /*out*/ PublicKeyAlgorithm& publicKeyAlgorithm,
-                                 /*out*/ DigestAlgorithm& digestAlgorithm)
+                                 /*out*/ std::optional<DigestAlgorithm>& digestAlgorithm)
 {
   // RFC 5758 Section 3.2 (ECDSA with SHA-2), and RFC 3279 Section 2.2.3
   // (ECDSA with SHA-1) say that parameters must be omitted.
@@ -211,6 +212,24 @@ SignatureAlgorithmIdentifierValue(Reader& input,
     0x00, 0xa2, 0x03, 0x02, 0x01, 0x40
   };
 
+  // Params for pure ML-DSA-44 signature
+  // python DottedOIDToCode.py id-ml-dsa-44 2.16.840.1.101.3.4.3.17
+  static const uint8_t id_ml_dsa_44[] = {
+      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x11
+  };
+
+  // Params for pure ML-DSA-65 signature
+  // python DottedOIDToCode.py id-ml-dsa-65 2.16.840.1.101.3.4.3.18
+  static const uint8_t id_ml_dsa_65[] = {
+      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x12
+  };
+
+  // Params for pure ML-DSA-87 signature
+  // python DottedOIDToCode.py id-ml-dsa-87 2.16.840.1.101.3.4.3.19
+  static const uint8_t id_ml_dsa_87[] = {
+      0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x13
+  };
+
   // Matching is attempted based on a rough estimate of the commonality of the
   // algorithm, to minimize the number of MatchRest calls.
   if (algorithmID.MatchRest(sha256WithRSAEncryption)) {
@@ -252,12 +271,25 @@ SignatureAlgorithmIdentifierValue(Reader& input,
     } else {
       return Result::ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED;
     }
+  } else if (algorithmID.MatchRest(id_ml_dsa_44) ||
+             algorithmID.MatchRest(id_ml_dsa_65) ||
+             algorithmID.MatchRest(id_ml_dsa_87)) {
+    publicKeyAlgorithm = PublicKeyAlgorithm::MLDSA;
+    digestAlgorithm = std::nullopt;
   } else {
     return Result::ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED;
   }
 
-  // Ensure that for non-RSA-PSS algorithms, the params are NULL or omitted.
-  if (publicKeyAlgorithm != PublicKeyAlgorithm::RSA_PSS) {
+  // ML-DSA is stricter than the rest: the params must be absent, not merely
+  // absent-or-NULL. CA/B Forum S/MIME BR 1.0.15 Section 7.1.3.2.4 requires the
+  // encoded AlgorithmIdentifier to be byte-for-byte 300b060960864801650304031x,
+  // which leaves no room for an explicit NULL.
+  if (publicKeyAlgorithm == PublicKeyAlgorithm::MLDSA) {
+    if (!algorithmParams.AtEnd()) {
+      return Result::ERROR_BAD_DER;
+    }
+  } else if (publicKeyAlgorithm != PublicKeyAlgorithm::RSA_PSS) {
+    // For everything but RSA-PSS the params are NULL or omitted.
     if (algorithmParams.Peek(NULLTag)) {
       rv = Null(algorithmParams);
       if (rv != Success) {

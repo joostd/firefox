@@ -23,6 +23,7 @@
  */
 
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include "pkixgtest.h"
@@ -309,7 +310,9 @@ INSTANTIATE_TEST_SUITE_P(pkixder_DigestAlgorithmIdentifier_Invalid,
 struct ValidSignatureAlgorithmIdentifierValueTestInfo
 {
   PublicKeyAlgorithm publicKeyAlg;
-  DigestAlgorithm digestAlg;
+  // Signature algorithms that are not parameterized by a digest - ML-DSA -
+  // report no digest at all, so this is optional.
+  std::optional<DigestAlgorithm> digestAlg;
   uint8_t der[MAX_ALGORITHM_OID_DER_LENGTH];
   size_t derLength;
   bool explicitNullAllowed;
@@ -441,7 +444,7 @@ TEST_P(pkixder_SignatureAlgorithmIdentifierValue_Valid, Valid)
     ASSERT_EQ(Success, input.Init(param.der, param.derLength));
     Reader reader(input);
     PublicKeyAlgorithm publicKeyAlg;
-    DigestAlgorithm digestAlg;
+    std::optional<DigestAlgorithm> digestAlg;
     ASSERT_EQ(Success,
               SignatureAlgorithmIdentifierValue(reader, publicKeyAlg,
                                                 digestAlg));
@@ -459,7 +462,7 @@ TEST_P(pkixder_SignatureAlgorithmIdentifierValue_Valid, Valid)
   ASSERT_EQ(Success, input.Init(derWithNullParam, param.derLength + 2));
   Reader reader(input);
   PublicKeyAlgorithm publicKeyAlg;
-  DigestAlgorithm digestAlg;
+  std::optional<DigestAlgorithm> digestAlg;
   ASSERT_EQ(param.explicitNullAllowed
               ? Success
               : Result::ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED,
@@ -476,6 +479,60 @@ INSTANTIATE_TEST_SUITE_P(
   pkixder_SignatureAlgorithmIdentifierValue_Valid,
   pkixder_SignatureAlgorithmIdentifierValue_Valid,
   testing::ValuesIn(VALID_SIGNATURE_ALGORITHM_VALUE_TEST_INFO));
+
+// ML-DSA does not fit the table above: it reports no digest algorithm, and it
+// is the only algorithm here for which an explicit NULL parameter is an error
+// rather than a tolerated encoding.
+static const uint8_t ML_DSA_OIDS[][11] =
+{
+  // id-ml-dsa-44 (2.16.840.1.101.3.4.3.17)
+  { 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x11 },
+  // id-ml-dsa-65 (2.16.840.1.101.3.4.3.18)
+  { 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x12 },
+  // id-ml-dsa-87 (2.16.840.1.101.3.4.3.19)
+  { 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x13 },
+};
+
+TEST_F(pkixder_pki_types_tests, SignatureAlgorithmIdentifierValueMLDSA)
+{
+  for (const auto& oid : ML_DSA_OIDS) {
+    Input input;
+    ASSERT_EQ(Success, input.Init(oid, sizeof(oid)));
+    Reader reader(input);
+    PublicKeyAlgorithm publicKeyAlg;
+    std::optional<DigestAlgorithm> digestAlg;
+    ASSERT_EQ(Success,
+              SignatureAlgorithmIdentifierValue(reader, publicKeyAlg,
+                                                digestAlg));
+    ASSERT_EQ(PublicKeyAlgorithm::MLDSA, publicKeyAlg);
+    ASSERT_FALSE(digestAlg.has_value());
+    ASSERT_EQ(Success, End(reader));
+  }
+}
+
+// CA/B Forum S/MIME BR 1.0.15 Section 7.1.3.2.4 requires the encoded
+// AlgorithmIdentifier to be byte-for-byte 300b060960864801650304031x, which
+// leaves no room for the explicit NULL that the RSA and ECDSA OIDs accept.
+TEST_F(pkixder_pki_types_tests,
+       SignatureAlgorithmIdentifierValueMLDSAExplicitNullParam)
+{
+  for (const auto& oid : ML_DSA_OIDS) {
+    uint8_t derWithNullParam[sizeof(ML_DSA_OIDS[0]) + 2];
+    memcpy(derWithNullParam, oid, sizeof(oid));
+    derWithNullParam[sizeof(oid)] = 0x05; // NULL tag
+    derWithNullParam[sizeof(oid) + 1] = 0x00; // length zero
+
+    Input input;
+    ASSERT_EQ(Success,
+              input.Init(derWithNullParam, sizeof(derWithNullParam)));
+    Reader reader(input);
+    PublicKeyAlgorithm publicKeyAlg;
+    std::optional<DigestAlgorithm> digestAlg;
+    ASSERT_EQ(Result::ERROR_BAD_DER,
+              SignatureAlgorithmIdentifierValue(reader, publicKeyAlg,
+                                                digestAlg));
+  }
+}
 
 static const InvalidAlgorithmIdentifierTestInfo
   INVALID_SIGNATURE_ALGORITHM_VALUE_TEST_INFO[] =
@@ -550,7 +607,7 @@ TEST_P(pkixder_SignatureAlgorithmIdentifier_Invalid, Invalid)
   ASSERT_EQ(Success, input.Init(param.der, param.derLength));
   Reader reader(input);
   der::PublicKeyAlgorithm publicKeyAlg;
-  DigestAlgorithm digestAlg;
+  std::optional<DigestAlgorithm> digestAlg;
   ASSERT_EQ(Result::ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED,
             SignatureAlgorithmIdentifierValue(reader, publicKeyAlg, digestAlg));
 }

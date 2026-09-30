@@ -304,6 +304,44 @@ DigestBufNSS(Input item,
 }
 
 Result
+VerifyMLDSASignedDataNSS(Input data,
+                         Input signature,
+                         Input subjectPublicKeyInfo,
+                         void* pkcs11PinArg)
+{
+  ScopedSECKEYPublicKey publicKey;
+  SECKEYPublicKey *pubk = NULL;
+  SECOidTag signaturePolicyTag, hashPolicyTag;
+  Result rv = SubjectPublicKeyInfoToSECKEYPublicKey(subjectPublicKeyInfo,
+                                                    publicKey);
+  if (rv != Success) {
+    return rv;
+  }
+
+  pubk = publicKey.get();
+  SECItem signatureItem(UnsafeMapInputToSECItem(signature));
+  SECItem dataItem(UnsafeMapInputToSECItem(data));
+  CK_MECHANISM_TYPE mechanism;
+
+  switch (pubk->u.mldsa.paramSet) {
+    case SEC_OID_ML_DSA_44:
+    case SEC_OID_ML_DSA_65:
+    case SEC_OID_ML_DSA_87:
+      mechanism = CKM_ML_DSA;
+      signaturePolicyTag = pubk->u.mldsa.paramSet;
+      hashPolicyTag = SEC_OID_UNKNOWN;
+      break;
+    default:
+      return Result::ERROR_UNSUPPORTED_KEYALG;
+      break;
+  }
+
+  SECOidTag policyTags[2] = {signaturePolicyTag, hashPolicyTag};
+  return VerifySignedData(pubk, mechanism, nullptr, &signatureItem,
+                          &dataItem, policyTags, pkcs11PinArg);
+}
+
+Result
 MapPRErrorCodeToResult(PRErrorCode error)
 {
   switch (error)

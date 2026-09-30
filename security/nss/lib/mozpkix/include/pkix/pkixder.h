@@ -37,6 +37,7 @@
 // they are able to do so; otherwise they fail with the input mark in an
 // undefined state.
 
+#include <optional>
 #include "mozpkix/Input.h"
 #include "mozpkix/pkixtypes.h"
 
@@ -488,12 +489,12 @@ inline Result OptionalExtensions(Reader& input, uint8_t tag,
 Result DigestAlgorithmIdentifier(Reader& input,
                                  /*out*/ DigestAlgorithm& algorithm);
 
-enum class PublicKeyAlgorithm { RSA_PKCS1, RSA_PSS, ECDSA };
+enum class PublicKeyAlgorithm { RSA_PKCS1, RSA_PSS, ECDSA, MLDSA };
 
 Result SignatureAlgorithmIdentifierValue(
     Reader& input,
     /*out*/ PublicKeyAlgorithm& publicKeyAlgorithm,
-    /*out*/ DigestAlgorithm& digestAlgorithm);
+    /*out*/ std::optional<DigestAlgorithm>& digestAlgorithm);
 
 struct SignedDataWithSignature final {
  public:

@@ -376,7 +376,7 @@
           },
         },
         'xcode_settings': {
-          'CLANG_CXX_LANGUAGE_STANDARD': 'c++0x',
+          'CLANG_CXX_LANGUAGE_STANDARD': 'c++17',
           'OTHER_CFLAGS': [
             '-fPIC',
             '-fno-common',
@@ -438,7 +438,7 @@
               '-std=c99',
             ],
             'cflags_cc': [
-              '-std=c++11',
+              '-std=c++17',
             ],
             'conditions': [
               [ 'target_arch=="ia32"', {

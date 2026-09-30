@@ -131,6 +131,14 @@ NSS_CMSSignerInfo_Destroy(NSSCMSSignerInfo *si)
 
     /* XXX storage ??? */
 }
+
+static PRBool
+sec_IsMLDSAAlgTag(SECOidTag tag)
+{
+    return (PRBool)(tag == SEC_OID_ML_DSA_44 || tag == SEC_OID_ML_DSA_65 ||
+                    tag == SEC_OID_ML_DSA_87);
+}
+
 static SECOidTag
 NSS_CMSSignerInfo_GetSignatureAlgorithmOidTag(KeyType keyType,
                                               SECOidTag pubkAlgTag,
@@ -142,6 +150,7 @@ NSS_CMSSignerInfo_GetSignatureAlgorithmOidTag(KeyType keyType,
         case rsaPssKey:
         case dsaKey:
         case ecKey:
+        case mldsaKey:
             return signAlgTag;
         default:
             return SEC_OID_UNKNOWN;
@@ -455,9 +464,19 @@ NSS_CMSSignerInfo_Verify(NSSCMSSignerInfo *signerinfo,
             /* This is to handle cases in which signatureAlgorithm field
              * specifies the public key algorithm rather than a signature
              * algorithm. */
+            SECOidTag vfyDigestAlgTag = digestalgtag;
+            /* ML-DSA signs the message itself, so the signed attributes are
+             * the whole input and there is no digest to combine with the
+             * signature algorithm. The digestAlgorithm field is still used
+             * for the messageDigest attribute, checked above, but passing it
+             * here would leave sec_GetCombinedMech with a hash it cannot
+             * pair with ML-DSA, and the verify would fail. */
+            if (sec_IsMLDSAAlgTag(pubkAlgTag)) {
+                vfyDigestAlgTag = SEC_OID_UNKNOWN;
+            }
             vs = (VFY_VerifyDataDirect(encoded_attrs.data, encoded_attrs.len,
                                        publickey, &(signerinfo->encDigest), pubkAlgTag,
-                                       digestalgtag, NULL, signerinfo->cmsg->pwfn_arg) != SECSuccess)
+                                       vfyDigestAlgTag, NULL, signerinfo->cmsg->pwfn_arg) != SECSuccess)
                      ? NSSCMSVS_BadSignature
                      : NSSCMSVS_GoodSignature;
         } else {
