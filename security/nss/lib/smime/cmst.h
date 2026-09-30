@@ -423,13 +423,43 @@ typedef struct NSSCMSKEKRecipientInfoStr NSSCMSKEKRecipientInfo;
 #define NSS_CMS_KEK_RECIPIENT_INFO_VERSION 4 /* what we *create* */
 
 /* -----------------------------------------------------------------------------
+ * KEM recipient info (RFC 9629 / RFC 9936), reached via RFC 5652's
+ * "[4] ori OtherRecipientInfo" CHOICE arm. OtherRecipientInfo is
+ * SEQUENCE { oriType OBJECT IDENTIFIER, oriValue ANY DEFINED BY oriType };
+ * NSSCMSOtherRecipientInfoStr models that directly (oriType plus the nested
+ * KEMRecipientInfo SEQUENCE embedded by value), since id-ori-kem is
+ * currently the only oriType this code understands.
+ */
+struct NSSCMSKEMRecipientInfoStr {
+    SECItem version;
+    NSSCMSRecipientIdentifier rid;
+    SECAlgorithmID kem;
+    SECItem kemct;
+    SECAlgorithmID kdf;
+    SECItem kekLength;
+    SECItem ukm; /* optional */
+    SECAlgorithmID wrap;
+    SECItem encryptedKey;
+};
+typedef struct NSSCMSKEMRecipientInfoStr NSSCMSKEMRecipientInfo;
+
+#define NSS_CMS_KEM_RECIPIENT_INFO_VERSION 0 /* what we *create*; RFC 9629 fixes this at 0 */
+
+struct NSSCMSOtherRecipientInfoStr {
+    SECItem oriType;
+    NSSCMSKEMRecipientInfo kemRecipientInfo;
+};
+typedef struct NSSCMSOtherRecipientInfoStr NSSCMSOtherRecipientInfo;
+
+/* -----------------------------------------------------------------------------
  * recipient info
  */
 
 typedef enum {
     NSSCMSRecipientInfoID_KeyTrans = 0,
     NSSCMSRecipientInfoID_KeyAgree = 1,
-    NSSCMSRecipientInfoID_KEK = 2
+    NSSCMSRecipientInfoID_KEK = 2,
+    NSSCMSRecipientInfoID_KEM = 3
 } NSSCMSRecipientInfoIDSelector;
 
 /*
@@ -452,6 +482,12 @@ typedef enum {
  * The new structure:
  * NSSCMSKeyTransRecipientInfoEx: sizeof(NSSCMSKeyTransRecipientInfo) +
  *                                1 int, 1 pointer
+ *
+ * NOTE: NSSCMSOtherRecipientInfo (added for RFC 9629 KEM support) is a
+ * strict superset of NSSCMSKeyTransRecipientInfo's fields (plus kem/kdf/
+ * kekLength/ukm/wrap) and is now the *largest* member of this union, not
+ * the smallest -- the backwards-compatibility sizing trick above no longer
+ * bounds this union's size the way the comment originally described.
  */
 
 struct NSSCMSRecipientInfoStr {
@@ -461,6 +497,7 @@ struct NSSCMSRecipientInfoStr {
         NSSCMSKeyAgreeRecipientInfo keyAgreeRecipientInfo;
         NSSCMSKEKRecipientInfo kekRecipientInfo;
         NSSCMSKeyTransRecipientInfoEx keyTransRecipientInfoEx;
+        NSSCMSOtherRecipientInfo otherRecipientInfo;
     } ri;
     /* --------- local; not part of encoding --------- */
     NSSCMSMessage *cmsg;   /* back pointer to message */

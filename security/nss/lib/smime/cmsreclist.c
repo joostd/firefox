@@ -66,6 +66,41 @@ nss_cms_recipients_traverse(NSSCMSRecipientInfo **recipientinfos,
                     count++;
                 }
                 break;
+            case NSSCMSRecipientInfoID_KEM:
+                if (recipient_list) {
+                    NSSCMSRecipientIdentifier *recipId =
+                        &ri->ri.otherRecipientInfo.kemRecipientInfo.rid;
+
+                    if (recipId->identifierType != NSSCMSRecipientID_IssuerSN &&
+                        recipId->identifierType != NSSCMSRecipientID_SubjectKeyID) {
+                        PORT_SetError(SEC_ERROR_INVALID_ARGS);
+                        return -1;
+                    }
+                    /* alloc one & fill it out */
+                    rle = (NSSCMSRecipient *)PORT_ZAlloc(sizeof(NSSCMSRecipient));
+                    if (!rle)
+                        return -1;
+
+                    rle->riIndex = i;
+                    rle->subIndex = -1;
+                    switch (recipId->identifierType) {
+                        case NSSCMSRecipientID_IssuerSN:
+                            rle->kind = RLIssuerSN;
+                            rle->id.issuerAndSN = recipId->id.issuerAndSN;
+                            break;
+                        case NSSCMSRecipientID_SubjectKeyID:
+                            rle->kind = RLSubjKeyID;
+                            rle->id.subjectKeyID = recipId->id.subjectKeyID;
+                            break;
+                        default: /* we never get here because of identifierType check
+                                    we done before. Leaving it to kill compiler warning */
+                            break;
+                    }
+                    recipient_list[rlindex++] = rle;
+                } else {
+                    count++;
+                }
+                break;
             case NSSCMSRecipientInfoID_KeyAgree:
                 if (ri->ri.keyAgreeRecipientInfo.recipientEncryptedKeys == NULL)
                     break;

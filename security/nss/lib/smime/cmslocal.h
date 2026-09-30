@@ -183,6 +183,28 @@ NSS_CMSUtil_DecryptSymKey_ECDH(SECKEYPrivateKey *privkey, SECItem *encKey,
                                SECItem *ukm, NSSCMSOriginatorIdentifierOrKey *oiok,
                                void *wincx);
 
+/*
+ * NSS_CMSUtil_EncryptSymKey_MLKEM - wrap a symmetric key per RFC 9629/9936
+ *
+ * Encapsulates against the recipient cert's ML-KEM public key, derives a KEK
+ * from the shared secret via HKDF-SHA256 (RFC 9936's mandatory KDF), and
+ * wraps bulkkey under that KEK with the RFC 9936-mandated AES Key Wrap
+ * variant for the cert's ML-KEM parameter set. Fills in kem/kemct/kdf/
+ * kekLength/wrap/encryptedKey; version and rid are set by the caller.
+ */
+extern SECStatus
+NSS_CMSUtil_EncryptSymKey_MLKEM(PLArenaPool *poolp, CERTCertificate *cert,
+                                PK11SymKey *bulkkey,
+                                NSSCMSKEMRecipientInfo *kemRecipientInfo);
+
+/*
+ * NSS_CMSUtil_DecryptSymKey_MLKEM - reverse of NSS_CMSUtil_EncryptSymKey_MLKEM
+ */
+extern PK11SymKey *
+NSS_CMSUtil_DecryptSymKey_MLKEM(SECKEYPrivateKey *privkey,
+                                NSSCMSKEMRecipientInfo *kemRecipientInfo,
+                                SECOidTag bulkalgtag);
+
 /************************************************************************
  * cmsreclist.c - recipient list stuff
  ************************************************************************/

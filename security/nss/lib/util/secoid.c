@@ -260,6 +260,8 @@ CONST_OID cmsAuthEnvelopedData[] = { PKCS9_SMIME_IDS, 1, 23 };
 CONST_OID cmsESDH[] = { PKCS9_SMIME_ALGS, 5 };
 CONST_OID cms3DESwrap[] = { PKCS9_SMIME_ALGS, 6 };
 CONST_OID cmsRC2wrap[] = { PKCS9_SMIME_ALGS, 7 };
+/* RFC 8619: id-alg-hkdf-with-sha256, 1.2.840.113549.1.9.16.3.28 */
+CONST_OID hkdfWithSha256[] = { PKCS9_SMIME_ALGS, 28 };
 
 /* RFC2633 SMIME message attributes */
 CONST_OID smimeEncryptionKeyPreference[] = { PKCS9_SMIME_ATTRS, 11 };
@@ -1931,6 +1933,9 @@ const static SECOidData oids[SEC_OID_TOTAL] = {
     OD(cmsAuthEnvelopedData, SEC_OID_CMS_AUTH_ENVELOPED_DATA,
        "CMS AuthEnvelopedData",
        CKM_INVALID_MECHANISM, INVALID_CERT_EXTENSION),
+
+    OD(hkdfWithSha256, SEC_OID_HKDF_WITH_SHA256,
+       "HKDF-SHA256", CKM_HKDF_DERIVE, INVALID_CERT_EXTENSION),
 
 };
 

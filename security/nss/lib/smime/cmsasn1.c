@@ -429,6 +429,59 @@ static const SEC_ASN1Template NSSCMSKEKRecipientInfoTemplate[] = {
 };
 
 /* -----------------------------------------------------------------------------
+ * KEM recipient info (RFC 9629 / RFC 9936)
+ *
+ * RFC 5652's OtherRecipientInfo ::= SEQUENCE { oriType OID, oriValue ANY }
+ * holds a *nested* KEMRecipientInfo SEQUENCE (its own tag+length) when
+ * oriType = id-ori-kem -- not oriType followed by KEMRecipientInfo's fields
+ * flattened into one SEQUENCE. This needs two templates connected by
+ * SEC_ASN1_INLINE (embed-by-value-with-its-own-tag), the same pattern
+ * already used everywhere in this file for embedding AlgorithmIdentifier
+ * fields. Verified against a hand-built, externally cross-checked DER
+ * test vector before landing.
+ */
+static const SEC_ASN1Template NSSCMSKEMRecipientInfoTemplate[] = {
+    { SEC_ASN1_SEQUENCE,
+      0, NULL, sizeof(NSSCMSKEMRecipientInfo) },
+    { SEC_ASN1_INTEGER,
+      offsetof(NSSCMSKEMRecipientInfo, version) },
+    { SEC_ASN1_INLINE,
+      offsetof(NSSCMSKEMRecipientInfo, rid),
+      NSSCMSRecipientIdentifierTemplate },
+    { SEC_ASN1_INLINE | SEC_ASN1_XTRN,
+      offsetof(NSSCMSKEMRecipientInfo, kem),
+      SEC_ASN1_SUB(SECOID_AlgorithmIDTemplate) },
+    { SEC_ASN1_OCTET_STRING,
+      offsetof(NSSCMSKEMRecipientInfo, kemct) },
+    { SEC_ASN1_INLINE | SEC_ASN1_XTRN,
+      offsetof(NSSCMSKEMRecipientInfo, kdf),
+      SEC_ASN1_SUB(SECOID_AlgorithmIDTemplate) },
+    { SEC_ASN1_INTEGER,
+      offsetof(NSSCMSKEMRecipientInfo, kekLength) },
+    { SEC_ASN1_OPTIONAL | SEC_ASN1_CONSTRUCTED | SEC_ASN1_EXPLICIT |
+          SEC_ASN1_CONTEXT_SPECIFIC | SEC_ASN1_XTRN | 0,
+      offsetof(NSSCMSKEMRecipientInfo, ukm),
+      SEC_ASN1_SUB(SEC_OctetStringTemplate) },
+    { SEC_ASN1_INLINE | SEC_ASN1_XTRN,
+      offsetof(NSSCMSKEMRecipientInfo, wrap),
+      SEC_ASN1_SUB(SECOID_AlgorithmIDTemplate) },
+    { SEC_ASN1_OCTET_STRING,
+      offsetof(NSSCMSKEMRecipientInfo, encryptedKey) },
+    { 0 }
+};
+
+static const SEC_ASN1Template NSSCMSOtherRecipientInfoTemplate[] = {
+    { SEC_ASN1_SEQUENCE,
+      0, NULL, sizeof(NSSCMSOtherRecipientInfo) },
+    { SEC_ASN1_OBJECT_ID,
+      offsetof(NSSCMSOtherRecipientInfo, oriType) },
+    { SEC_ASN1_INLINE,
+      offsetof(NSSCMSOtherRecipientInfo, kemRecipientInfo),
+      NSSCMSKEMRecipientInfoTemplate },
+    { 0 }
+};
+
+/* -----------------------------------------------------------------------------
  * recipient info
  */
 const SEC_ASN1Template NSSCMSRecipientInfoTemplate[] = {
@@ -443,6 +496,10 @@ const SEC_ASN1Template NSSCMSRecipientInfoTemplate[] = {
       offsetof(NSSCMSRecipientInfo, ri.kekRecipientInfo),
       NSSCMSKEKRecipientInfoTemplate,
       NSSCMSRecipientInfoID_KEK },
+    { SEC_ASN1_CONSTRUCTED | SEC_ASN1_CONTEXT_SPECIFIC | 4,
+      offsetof(NSSCMSRecipientInfo, ri.otherRecipientInfo),
+      NSSCMSOtherRecipientInfoTemplate,
+      NSSCMSRecipientInfoID_KEM },
     { SEC_ASN1_INLINE,
       offsetof(NSSCMSRecipientInfo, ri.keyTransRecipientInfo),
       NSSCMSKeyTransRecipientInfoTemplate,

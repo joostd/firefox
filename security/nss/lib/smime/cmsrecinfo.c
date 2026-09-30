@@ -199,6 +199,44 @@ nss_cmsrecipientinfo_create(NSSCMSMessage *cmsg,
                                   (void *)rek);
 
             break;
+        case SEC_OID_ML_KEM_512:
+        case SEC_OID_ML_KEM_768:
+        case SEC_OID_ML_KEM_1024: {
+            /* RFC 5652 id-ori-kem, 1.2.840.113549.1.9.16.13.3 -- the only
+             * oriType this code understands. */
+            static const unsigned char oriKemOidBytes[] = {
+                0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x10, 0x0d, 0x03
+            };
+            NSSCMSRecipientIdentifier *kemRid;
+
+            PORT_Assert(type == NSSCMSRecipientID_IssuerSN);
+            if (type != NSSCMSRecipientID_IssuerSN) {
+                rv = SECFailure;
+                break;
+            }
+            ri->recipientInfoType = NSSCMSRecipientInfoID_KEM;
+
+            rv = SECITEM_AllocItem(poolp, &ri->ri.otherRecipientInfo.oriType,
+                                   sizeof(oriKemOidBytes))
+                     ? SECSuccess
+                     : SECFailure;
+            if (rv != SECSuccess) {
+                break;
+            }
+            PORT_Memcpy(ri->ri.otherRecipientInfo.oriType.data, oriKemOidBytes,
+                        sizeof(oriKemOidBytes));
+
+            kemRid = &ri->ri.otherRecipientInfo.kemRecipientInfo.rid;
+            kemRid->identifierType = NSSCMSRecipientID_IssuerSN;
+            kemRid->id.issuerAndSN = CERT_GetCertIssuerAndSN(poolp, cert);
+            if (kemRid->id.issuerAndSN == NULL) {
+                rv = SECFailure;
+                break;
+            }
+            /* The actual encapsulate/derive/wrap happens later, once
+             * bulkkey exists -- see NSS_CMSRecipientInfo_WrapBulkKey. */
+            break;
+        }
         default:
             /* other algorithms not supported yet */
             /* NOTE that we do not support any KEK algorithm */
@@ -218,6 +256,14 @@ nss_cmsrecipientinfo_create(NSSCMSMessage *cmsg,
             else
                 version = NSS_CMS_KEYTRANS_RECIPIENT_INFO_VERSION_SUBJKEY;
             dummy = SEC_ASN1EncodeInteger(poolp, &(ri->ri.keyTransRecipientInfo.version), version);
+            if (dummy == NULL)
+                goto loser;
+            break;
+        case NSSCMSRecipientInfoID_KEM:
+            /* RFC 9629: KEMRecipientInfo.version is always 0. */
+            dummy = SEC_ASN1EncodeInteger(
+                poolp, &(ri->ri.otherRecipientInfo.kemRecipientInfo.version),
+                NSS_CMS_KEM_RECIPIENT_INFO_VERSION);
             if (dummy == NULL)
                 goto loser;
             break;
@@ -272,6 +318,9 @@ NSS_CMSRecipient_IsSupported(CERTCertificate *cert)
     switch (certalgtag) {
         case SEC_OID_PKCS1_RSA_ENCRYPTION:
         case SEC_OID_ANSIX962_EC_PUBLIC_KEY:
+        case SEC_OID_ML_KEM_512:
+        case SEC_OID_ML_KEM_768:
+        case SEC_OID_ML_KEM_1024:
             return PR_TRUE;
         default:
             return PR_FALSE;
@@ -387,6 +436,9 @@ NSS_CMSRecipientInfo_GetVersion(NSSCMSRecipientInfo *ri)
         case NSSCMSRecipientInfoID_KeyAgree:
             versionitem = &(ri->ri.keyAgreeRecipientInfo.version);
             break;
+        case NSSCMSRecipientInfoID_KEM:
+            versionitem = &(ri->ri.otherRecipientInfo.kemRecipientInfo.version);
+            break;
     }
 
     PORT_Assert(versionitem);
@@ -417,6 +469,10 @@ NSS_CMSRecipientInfo_GetEncryptedKey(NSSCMSRecipientInfo *ri, int subIndex)
         case NSSCMSRecipientInfoID_KeyAgree:
             enckey = &(ri->ri.keyAgreeRecipientInfo.recipientEncryptedKeys[subIndex]->encKey);
             break;
+        case NSSCMSRecipientInfoID_KEM:
+            /* ignore subIndex */
+            enckey = &(ri->ri.otherRecipientInfo.kemRecipientInfo.encryptedKey);
+            break;
     }
     return enckey;
 }
@@ -435,6 +491,12 @@ NSS_CMSRecipientInfo_GetKeyEncryptionAlgorithmTag(NSSCMSRecipientInfo *ri)
             break;
         case NSSCMSRecipientInfoID_KEK:
             encalgtag = SECOID_GetAlgorithmTag(&(ri->ri.kekRecipientInfo.keyEncAlg));
+            break;
+        case NSSCMSRecipientInfoID_KEM:
+            /* KEM has three algorithm identifiers (kem/kdf/wrap); "wrap" is
+             * the one that actually encrypted the bulk key bytes, so it's
+             * the closest match to what callers of this accessor expect. */
+            encalgtag = SECOID_GetAlgorithmTag(&(ri->ri.otherRecipientInfo.kemRecipientInfo.wrap));
             break;
     }
     return encalgtag;
@@ -543,6 +605,18 @@ NSS_CMSRecipientInfo_WrapBulkKey(NSSCMSRecipientInfo *ri, PK11SymKey *bulkkey,
                     break;
             }
             break;
+        case SEC_OID_ML_KEM_512:
+        case SEC_OID_ML_KEM_768:
+        case SEC_OID_ML_KEM_1024:
+            if (!cert) {
+                /* SubjectKeyID-only recipients aren't supported for KEM yet. */
+                PORT_SetError(SEC_ERROR_INVALID_ARGS);
+                rv = SECFailure;
+                break;
+            }
+            rv = NSS_CMSUtil_EncryptSymKey_MLKEM(
+                poolp, cert, bulkkey, &ri->ri.otherRecipientInfo.kemRecipientInfo);
+            break;
         default:
             /* other algorithms not supported yet */
             /* NOTE that we do not support any KEK algorithm */
@@ -584,6 +658,21 @@ NSS_CMSRecipientInfo_UnwrapBulkKey(NSSCMSRecipientInfo *ri, int subIndex,
             oiok = &(ri->ri.keyAgreeRecipientInfo.originatorIdentifierOrKey);
             ukm = &(ri->ri.keyAgreeRecipientInfo.ukm);
             break;
+        case NSSCMSRecipientInfoID_KEM:
+            /* KEM has three algorithm identifiers (kem/kdf/wrap), not the
+             * single keyEncAlg the rest of this function is built around, so
+             * it's handled directly here rather than through the algid/
+             * encalgtag machinery below.
+             * TODO: NSS_SMIMEUtil_KeyDecodingAllowed's export-policy check
+             * is skipped for this path; there is no established policy
+             * notion for ML-KEM yet. */
+            bulkkey = NSS_CMSUtil_DecryptSymKey_MLKEM(
+                privkey, &ri->ri.otherRecipientInfo.kemRecipientInfo, bulkalgtag);
+            if (bulkkey == NULL) {
+                error = SEC_ERROR_UNSUPPORTED_KEYALG;
+                goto loser;
+            }
+            return bulkkey;
         case NSSCMSRecipientInfoID_KEK:
             algid = &(ri->ri.kekRecipientInfo.keyEncAlg);
             parameters = &(ri->ri.kekRecipientInfo.keyEncAlg.parameters);

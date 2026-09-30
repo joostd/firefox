@@ -548,6 +548,12 @@ typedef enum {
 
     SEC_OID_CMS_AUTH_ENVELOPED_DATA = 399,
 
+    /* RFC 8619 / RFC 9936: HKDF-SHA256 as a CMS KeyDerivationAlgorithmIdentifier,
+     * used by KEMRecipientInfo's "kdf" field. Previously CKM_HKDF_DERIVE only
+     * existed as a bare PK11 mechanism constant (see lib/ssl/tls13hkdf.c); this
+     * is the first AlgorithmIdentifier OID wired to it. */
+    SEC_OID_HKDF_WITH_SHA256 = 400,
+
     SEC_OID_TOTAL
 } SECOidTag;
 

@@ -647,3 +647,296 @@ loser:
     SECOID_DestroyAlgorithmID(&keyWrapAlg, PR_FALSE);
     return bulkkey;
 }
+
+/* ====== ML-KEM (RFC 9629 / RFC 9936) ======================================= */
+
+/*
+ * RFC 9936 section 2.1's MUST-support pairing: the AES Key Wrap size is
+ * keyed off the ML-KEM parameter set, and HKDF-SHA256 is the sole
+ * mandatory KDF for all three parameter sets.
+ */
+static SECStatus
+cms_GetMLKEMWrapParams(SECOidTag kemAlgTag, SECOidTag *wrapAlgTag,
+                       unsigned int *kekSize)
+{
+    switch (kemAlgTag) {
+        case SEC_OID_ML_KEM_512:
+            *wrapAlgTag = SEC_OID_AES_128_KEY_WRAP;
+            *kekSize = 16;
+            break;
+        case SEC_OID_ML_KEM_768:
+        case SEC_OID_ML_KEM_1024:
+            *wrapAlgTag = SEC_OID_AES_256_KEY_WRAP;
+            *kekSize = 32;
+            break;
+        default:
+            PORT_SetError(SEC_ERROR_INVALID_ALGORITHM);
+            return SECFailure;
+    }
+    return SECSuccess;
+}
+
+/*
+ * CMSORIforKEMOtherInfo ::= SEQUENCE {
+ *     wrap KeyEncryptionAlgorithmIdentifier,
+ *     kekLength INTEGER (1..65535),
+ *     ukm [0] EXPLICIT UserKeyingMaterial OPTIONAL }
+ *
+ * This is RFC 9629's HKDF "info" input. It is never a top-level encoded
+ * object in its own right (unlike KEMRecipientInfo), so -- like
+ * ECC_CMS_SharedInfo above -- it is kept local to this file rather than
+ * added to cmsasn1.c/cmst.h.
+ */
+typedef struct CMSORIforKEMOtherInfoStr CMSORIforKEMOtherInfo;
+struct CMSORIforKEMOtherInfoStr {
+    SECAlgorithmID *wrap;
+    SECItem kekLength;
+    SECItem ukm; /* optional */
+};
+
+static const SEC_ASN1Template CMSORIforKEMOtherInfoTemplate[] = {
+    { SEC_ASN1_SEQUENCE,
+      0, NULL, sizeof(CMSORIforKEMOtherInfo) },
+    { SEC_ASN1_XTRN | SEC_ASN1_POINTER,
+      offsetof(CMSORIforKEMOtherInfo, wrap),
+      SEC_ASN1_SUB(SECOID_AlgorithmIDTemplate) },
+    { SEC_ASN1_INTEGER,
+      offsetof(CMSORIforKEMOtherInfo, kekLength) },
+    { SEC_ASN1_OPTIONAL | SEC_ASN1_EXPLICIT | SEC_ASN1_CONSTRUCTED |
+          SEC_ASN1_CONTEXT_SPECIFIC | SEC_ASN1_XTRN | 0,
+      offsetof(CMSORIforKEMOtherInfo, ukm),
+      SEC_ASN1_SUB(SEC_OctetStringTemplate) },
+    { 0 }
+};
+
+/* kekSize is in octets (RFC 9629 section 3: "kekLength is the size of the
+ * KEK in octets"). ukm may be NULL to omit it. */
+static SECItem *
+Create_CMS_KEM_OtherInfo(PLArenaPool *poolp, SECAlgorithmID *wrapAlgId,
+                         unsigned int kekSize, SECItem *ukm)
+{
+    CMSORIforKEMOtherInfo otherInfo;
+
+    PORT_Memset(&otherInfo, 0, sizeof(otherInfo));
+    otherInfo.wrap = wrapAlgId;
+    if (ukm) {
+        otherInfo.ukm = *ukm;
+    }
+
+    if (SEC_ASN1EncodeInteger(poolp, &otherInfo.kekLength, (long)kekSize) == NULL) {
+        return NULL;
+    }
+
+    return SEC_ASN1EncodeItem(poolp, NULL, &otherInfo, CMSORIforKEMOtherInfoTemplate);
+}
+
+/*
+ * Derive the KEK from an ML-KEM shared secret via HKDF-SHA256, per
+ * RFC 9629 section 5: IKM is the shared secret, info is the DER of
+ * CMSORIforKEMOtherInfo, L (kekSize) is the requested output length, no
+ * salt is used (all-zero default).
+ */
+static PK11SymKey *
+cms_MLKEM_DeriveKEK(PK11SymKey *sharedSecret, SECItem *otherInfo,
+                    CK_MECHANISM_TYPE wrapMech, unsigned int kekSize)
+{
+    CK_HKDF_PARAMS params;
+    SECItem paramsItem;
+
+    PORT_Memset(&params, 0, sizeof(params));
+    params.bExtract = CK_TRUE;
+    params.bExpand = CK_TRUE;
+    params.prfHashMechanism = CKM_SHA256;
+    params.ulSaltType = CKF_HKDF_SALT_NULL;
+    params.pInfo = otherInfo->data;
+    params.ulInfoLen = otherInfo->len;
+
+    paramsItem.type = siBuffer;
+    paramsItem.data = (unsigned char *)&params;
+    paramsItem.len = sizeof(params);
+
+    return PK11_Derive(sharedSecret, CKM_HKDF_DERIVE, &paramsItem, wrapMech,
+                       CKA_WRAP, (int)kekSize);
+}
+
+SECStatus
+NSS_CMSUtil_EncryptSymKey_MLKEM(PLArenaPool *poolp, CERTCertificate *cert,
+                                PK11SymKey *bulkkey,
+                                NSSCMSKEMRecipientInfo *kemRecipientInfo)
+{
+    SECOidTag kemAlgTag, wrapAlgTag;
+    CK_MECHANISM_TYPE wrapMech;
+    unsigned int kekSize, bulkkeySize;
+    SECKEYPublicKey *publickey = NULL;
+    PK11SymKey *sharedSecret = NULL;
+    PK11SymKey *kek = NULL;
+    SECItem *kemct = NULL;
+    SECItem *otherInfo = NULL;
+    SECStatus rv = SECFailure;
+
+    kemAlgTag = SECOID_GetAlgorithmTag(&(cert->subjectPublicKeyInfo.algorithm));
+    if (cms_GetMLKEMWrapParams(kemAlgTag, &wrapAlgTag, &kekSize) != SECSuccess) {
+        return SECFailure;
+    }
+    wrapMech = PK11_AlgtagToMechanism(wrapAlgTag);
+    if (wrapMech == CKM_INVALID_MECHANISM) {
+        PORT_SetError(SEC_ERROR_INVALID_ALGORITHM);
+        return SECFailure;
+    }
+
+    bulkkeySize = PK11_GetKeyLength(bulkkey);
+    if (bulkkeySize == 0) {
+        return SECFailure;
+    }
+
+    publickey = CERT_ExtractPublicKey(cert);
+    if (publickey == NULL) {
+        goto loser;
+    }
+
+    if (PK11_Encapsulate(publickey, CKM_HKDF_DERIVE,
+                         PK11_ATTR_SESSION | PK11_ATTR_PRIVATE |
+                             PK11_ATTR_INSENSITIVE | PK11_ATTR_EXTRACTABLE,
+                         CKF_DERIVE, &sharedSecret, &kemct) != SECSuccess) {
+        goto loser;
+    }
+
+    if (SECOID_SetAlgorithmID(poolp, &kemRecipientInfo->kem, kemAlgTag, NULL) != SECSuccess) {
+        goto loser;
+    }
+    if (SECOID_SetAlgorithmID(poolp, &kemRecipientInfo->kdf,
+                              SEC_OID_HKDF_WITH_SHA256, NULL) != SECSuccess) {
+        goto loser;
+    }
+    if (SECOID_SetAlgorithmID(poolp, &kemRecipientInfo->wrap, wrapAlgTag, NULL) != SECSuccess) {
+        goto loser;
+    }
+    if (SEC_ASN1EncodeInteger(poolp, &kemRecipientInfo->kekLength, (long)kekSize) == NULL) {
+        goto loser;
+    }
+
+    otherInfo = Create_CMS_KEM_OtherInfo(poolp, &kemRecipientInfo->wrap, kekSize, NULL);
+    if (otherInfo == NULL) {
+        goto loser;
+    }
+
+    kek = cms_MLKEM_DeriveKEK(sharedSecret, otherInfo, wrapMech, kekSize);
+    if (kek == NULL) {
+        goto loser;
+    }
+
+    if (SECITEM_CopyItem(poolp, &kemRecipientInfo->kemct, kemct) != SECSuccess) {
+        goto loser;
+    }
+
+    /* AES key wrap output is 8 bytes longer than the input key (RFC 3394
+     * section 2.2.1). */
+    kemRecipientInfo->encryptedKey.len = bulkkeySize + 8;
+    kemRecipientInfo->encryptedKey.data =
+        (unsigned char *)PORT_ArenaAlloc(poolp, kemRecipientInfo->encryptedKey.len);
+    if (kemRecipientInfo->encryptedKey.data == NULL) {
+        goto loser;
+    }
+
+    if (PK11_WrapSymKey(wrapMech, NULL, kek, bulkkey, &kemRecipientInfo->encryptedKey) != SECSuccess) {
+        goto loser;
+    }
+
+    rv = SECSuccess;
+
+loser:
+    if (publickey) {
+        SECKEY_DestroyPublicKey(publickey);
+    }
+    if (sharedSecret) {
+        PK11_FreeSymKey(sharedSecret);
+    }
+    if (kek) {
+        PK11_FreeSymKey(kek);
+    }
+    if (kemct) {
+        SECITEM_FreeItem(kemct, PR_TRUE);
+    }
+    return rv;
+}
+
+PK11SymKey *
+NSS_CMSUtil_DecryptSymKey_MLKEM(SECKEYPrivateKey *privkey,
+                                NSSCMSKEMRecipientInfo *kemRecipientInfo,
+                                SECOidTag bulkalgtag)
+{
+    SECOidTag kemAlgTag, kdfAlgTag, wrapAlgTag;
+    CK_MECHANISM_TYPE target, wrapMech;
+    unsigned int kekSize;
+    long kekLengthValue;
+    PK11SymKey *sharedSecret = NULL;
+    PK11SymKey *kek = NULL;
+    PK11SymKey *bulkkey = NULL;
+    SECItem *otherInfo = NULL;
+
+    PORT_Assert(bulkalgtag != SEC_OID_UNKNOWN);
+    target = PK11_AlgtagToMechanism(bulkalgtag);
+    if (bulkalgtag == SEC_OID_UNKNOWN || target == CKM_INVALID_MECHANISM) {
+        PORT_SetError(SEC_ERROR_INVALID_ALGORITHM);
+        goto loser;
+    }
+
+    kemAlgTag = SECOID_GetAlgorithmTag(&kemRecipientInfo->kem);
+    if (kemAlgTag != SEC_OID_ML_KEM_512 && kemAlgTag != SEC_OID_ML_KEM_768 &&
+        kemAlgTag != SEC_OID_ML_KEM_1024) {
+        PORT_SetError(SEC_ERROR_INVALID_ALGORITHM);
+        goto loser;
+    }
+
+    kdfAlgTag = SECOID_GetAlgorithmTag(&kemRecipientInfo->kdf);
+    if (kdfAlgTag != SEC_OID_HKDF_WITH_SHA256) {
+        /* RFC 9936 only makes HKDF-SHA256 mandatory; this implementation
+         * does not yet support any other KDF choice. */
+        PORT_SetError(SEC_ERROR_INVALID_ALGORITHM);
+        goto loser;
+    }
+
+    wrapAlgTag = SECOID_GetAlgorithmTag(&kemRecipientInfo->wrap);
+    wrapMech = PK11_AlgtagToMechanism(wrapAlgTag);
+    if (wrapAlgTag == SEC_OID_UNKNOWN || wrapMech == CKM_INVALID_MECHANISM) {
+        PORT_SetError(SEC_ERROR_INVALID_ALGORITHM);
+        goto loser;
+    }
+
+    if (SEC_ASN1DecodeInteger(&kemRecipientInfo->kekLength, (unsigned long *)&kekLengthValue) != SECSuccess) {
+        goto loser;
+    }
+    kekSize = (unsigned int)kekLengthValue;
+
+    if (PK11_Decapsulate(privkey, &kemRecipientInfo->kemct, CKM_HKDF_DERIVE,
+                         PK11_ATTR_SESSION | PK11_ATTR_PRIVATE |
+                             PK11_ATTR_INSENSITIVE | PK11_ATTR_EXTRACTABLE,
+                         CKF_DERIVE, &sharedSecret) != SECSuccess) {
+        goto loser;
+    }
+
+    otherInfo = Create_CMS_KEM_OtherInfo(NULL, &kemRecipientInfo->wrap, kekSize, NULL);
+    if (otherInfo == NULL) {
+        goto loser;
+    }
+
+    kek = cms_MLKEM_DeriveKEK(sharedSecret, otherInfo, wrapMech, kekSize);
+    if (kek == NULL) {
+        goto loser;
+    }
+
+    bulkkey = PK11_UnwrapSymKey(kek, wrapMech, NULL, &kemRecipientInfo->encryptedKey,
+                                target, CKA_UNWRAP, 0);
+
+loser:
+    if (sharedSecret) {
+        PK11_FreeSymKey(sharedSecret);
+    }
+    if (kek) {
+        PK11_FreeSymKey(kek);
+    }
+    if (otherInfo) {
+        SECITEM_FreeItem(otherInfo, PR_TRUE);
+    }
+    return bulkkey;
+}
