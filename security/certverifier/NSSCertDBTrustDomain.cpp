@@ -1474,6 +1474,17 @@ Result NSSCertDBTrustDomain::VerifyECDSASignedData(
       signature, subjectPublicKeyInfo, mSignatureCache, mPinArg);
 }
 
+Result NSSCertDBTrustDomain::VerifyMLDSASignedData(
+    Input data, Input signature, Input subjectPublicKeyInfo) {
+  // Pure ML-DSA has no prehash. The digest algorithm passed here only feeds
+  // the signature cache key.
+  return VerifySignedDataWithCache(
+      der::PublicKeyAlgorithm::MLDSA,
+      mozilla::glean::cert_signature_cache::total,
+      mozilla::glean::cert_signature_cache::hits, data, DigestAlgorithm::sha256,
+      signature, subjectPublicKeyInfo, mSignatureCache, mPinArg);
+}
+
 Result NSSCertDBTrustDomain::CheckValidityIsAcceptable(
     Time notBefore, Time notAfter, EndEntityOrCA endEntityOrCA,
     KeyPurposeId keyPurpose) {
